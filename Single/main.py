@@ -51,7 +51,7 @@ def train(model, optimizer, data_loader, criterion, device, log_interval=100,emb
     for i, (fields, target) in enumerate(tk0):
         fields, target = fields.to(device), target.to(device)
         if emb:
-            embed_x = emb(fields)
+            embed_x = emb(fields).to(device)
             y = model(fields,embed_x)
         else:
             y = model(fields)
@@ -72,7 +72,7 @@ def test(model, data_loader, device,emb=None):
             fields, target = fields.to(device), target.to(device)
             start = time.time()
             if emb:
-                embed_x = emb(fields)
+                embed_x = emb(fields).to(device)
                 y = model(fields,embed_x)
             else:
                 y = model(fields)
