@@ -68,7 +68,7 @@ def test(model, data_loader, device,emb=None):
     model.eval()
     targets, predicts, infer_time  = list(), list(), list()
     with torch.no_grad():
-        for fields, target in tqdm(data_loader, smoothing=0, mininterval=1.0):
+        for fields, target in enumerate(tqdm(data_loader, smoothing=0, mininterval=1.0)):
             fields, target = fields.to(device), target.to(device)
             start = time.time()
             if emb:
@@ -98,9 +98,9 @@ def main(dataset_name,
     test_length = len(dataset) - train_length - valid_length
     train_dataset, valid_dataset, test_dataset = torch.utils.data.random_split(
         dataset, (train_length, valid_length, test_length),generator=torch.Generator().manual_seed(42))
-    train_data_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=8)
-    valid_data_loader = DataLoader(valid_dataset, batch_size=batch_size, num_workers=8)
-    test_data_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=8)
+    train_data_loader = DataLoader(train_dataset, batch_size=batch_size)
+    valid_data_loader = DataLoader(valid_dataset, batch_size=batch_size)
+    test_data_loader = DataLoader(test_dataset, batch_size=batch_size)
     emb = FeaturesEmbedding(args.field_dims,args.embed_dim)
     model = get_model(model_name, args.field_dims, args.embed_dim).to(device)
     criterion = torch.nn.BCELoss()
