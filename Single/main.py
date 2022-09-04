@@ -68,7 +68,7 @@ def test(model, data_loader, device,emb=None):
     model.eval()
     targets, predicts, infer_time  = list(), list(), list()
     with torch.no_grad():
-        for fields, target in enumerate(tqdm(data_loader, smoothing=0, mininterval=1.0)):
+        for fields, target in tqdm(data_loader, smoothing=0, mininterval=1.0):
             fields, target = fields.to(device), target.to(device)
             start = time.time()
             if emb:
