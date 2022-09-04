@@ -1,33 +1,17 @@
 import torch
-import tqdm
+from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, log_loss
 import time
-from torch.utils.data import DataLoader
 
-from torchfm.dataset.avazu import AvazuDataset
-from torchfm.dataset.criteo import CriteoDataset
-from torchfm.dataset.movielens import MovieLens1MDataset
-from torchfm.model.afi import AutomaticFeatureInteractionModel
-from torchfm.model.afm import AttentionalFactorizationMachineModel
-from torchfm.model.dcn import DeepCrossNetworkModel
-from torchfm.model.dfm import DeepFactorizationMachineModel
-from torchfm.model.ffm import FieldAwareFactorizationMachineModel
-from torchfm.model.fm import FactorizationMachineModel
-from torchfm.model.fnfm import FieldAwareNeuralFactorizationMachineModel
-from torchfm.model.fnn import FactorizationSupportedNeuralNetworkModel
-from torchfm.model.hofm import HighOrderFactorizationMachineModel
-from torchfm.model.lr import LogisticRegressionModel
-from torchfm.model.ncf import NeuralCollaborativeFiltering
-from torchfm.model.nfm import NeuralFactorizationMachineModel
-from torchfm.model.pnn import ProductNeuralNetworkModel
-from torchfm.model.wd import WideAndDeepModel
-from torchfm.model.xdfm import ExtremeDeepFactorizationMachineModel
-from torchfm.model.afn import AdaptiveFactorizationNetwork
+from torch.utils.data import DataLoader
+from dataset import *
+from pruner import *
+from torchfm.layer import *
 
 
 def get_dataset(name, path):
-    if name == 'movielens1M' or name == 'movielens1M_inter':
-        return MovieLens1MDataset(path)
+    if name == 'movielens1M':
+        return Movielens1MDataset(path)
     elif name == 'criteo':
         return CriteoDataset(path)
     elif name == 'avazu':
@@ -35,59 +19,6 @@ def get_dataset(name, path):
     else:
         raise ValueError('unknown dataset name: ' + name)
 
-
-def get_model(name, dataset,decision =None):
-    """
-    Hyperparameters are empirically determined, not opitmized.
-    """
-    field_dims = dataset.field_dims
-    if decision:
-        field_dims = [field_dims[i] for i in decision]
-    print(field_dims)
-    if name == 'lr':
-        return LogisticRegressionModel(field_dims)
-    elif name == 'fm':
-        return FactorizationMachineModel(field_dims, embed_dim=16)
-    elif name == 'hofm':
-        return HighOrderFactorizationMachineModel(field_dims, order=3, embed_dim=16)
-    elif name == 'ffm':
-        return FieldAwareFactorizationMachineModel(field_dims, embed_dim=4)
-    elif name == 'fnn':
-        return FactorizationSupportedNeuralNetworkModel(field_dims, embed_dim=16, mlp_dims=(16, 16), dropout=0.2)
-    elif name == 'wd':
-        return WideAndDeepModel(field_dims, embed_dim=16, mlp_dims=(16, 16), dropout=0.2)
-    elif name == 'ipnn':
-        return ProductNeuralNetworkModel(field_dims, embed_dim=16, mlp_dims=(16,), method='inner', dropout=0.2)
-    elif name == 'opnn':
-        return ProductNeuralNetworkModel(field_dims, embed_dim=16, mlp_dims=(16,), method='outer', dropout=0.2)
-    elif name == 'dcn':
-        return DeepCrossNetworkModel(field_dims, embed_dim=16, num_layers=3, mlp_dims=(16, 8), dropout=0.2)
-    elif name == 'nfm':
-        return NeuralFactorizationMachineModel(field_dims, embed_dim=64, mlp_dims=(64,), dropouts=(0.2, 0.2))
-    elif name == 'ncf':
-        # only supports MovieLens dataset because for other datasets user/item colums are indistinguishable
-        assert isinstance(dataset, MovieLens1MDataset)
-        return NeuralCollaborativeFiltering(field_dims, embed_dim=16, mlp_dims=(16, 16), dropout=0.2,
-                                            user_field_idx=dataset.user_field_idx,
-                                            item_field_idx=dataset.item_field_idx)
-    elif name == 'fnfm':
-        return FieldAwareNeuralFactorizationMachineModel(field_dims, embed_dim=4, mlp_dims=(64,), dropouts=(0.2, 0.2))
-    elif name == 'dfm':
-        return DeepFactorizationMachineModel(field_dims, embed_dim=16, mlp_dims=(16, 8), dropout=0.2)
-    elif name == 'xdfm':
-        return ExtremeDeepFactorizationMachineModel(
-            field_dims, embed_dim=16, cross_layer_sizes=(16, 16), split_half=False, mlp_dims=(16, 16), dropout=0.2)
-    elif name == 'afm':
-        return AttentionalFactorizationMachineModel(field_dims, embed_dim=16, attn_size=16, dropouts=(0.2, 0.2))
-    elif name == 'afi':
-        return AutomaticFeatureInteractionModel(
-             field_dims, embed_dim=16, atten_embed_dim=64, num_heads=2, num_layers=3, mlp_dims=(400, 400), dropouts=(0, 0, 0))
-    elif name == 'afn':
-        print("Model:AFN")
-        return AdaptiveFactorizationNetwork(
-            field_dims, embed_dim=16, LNN_dim=1500, mlp_dims=(400, 400, 400), dropouts=(0, 0, 0))
-    else:
-        raise ValueError('unknown model name: ' + name)
 
 
 class EarlyStopper(object):
@@ -98,11 +29,13 @@ class EarlyStopper(object):
         self.best_accuracy = 0
         self.save_path = save_path
 
-    def is_continuable(self, model, accuracy):
+    def is_continuable(self, model, accuracy,emb=None):
         if accuracy > self.best_accuracy:
             self.best_accuracy = accuracy
             self.trial_counter = 0
-            torch.save(model, self.save_path)
+            torch.save({'state_dict': model.state_dict()}, self.save_path)  # torch.save(model, self.save_path)
+            if emb:
+                torch.save({'state_dict': emb.state_dict()}, 'chkpt/emb.pt')
             return True
         elif self.trial_counter + 1 < self.num_trials:
             self.trial_counter += 1
@@ -111,15 +44,17 @@ class EarlyStopper(object):
             return False
 
 
-def train(model, optimizer, data_loader, criterion, device, log_interval=100,decision =None):
+def train(model, optimizer, data_loader, criterion, device, log_interval=100,emb=None):
     model.train()
     total_loss = 0
-    tk0 = tqdm.tqdm(data_loader, smoothing=0, mininterval=1.0)
+    tk0 = tqdm(data_loader, smoothing=0, mininterval=1.0)
     for i, (fields, target) in enumerate(tk0):
-        if decision:
-            fields = torch.cat([fields[:,None,i] for i in decision],-1)
         fields, target = fields.to(device), target.to(device)
-        y = model(fields)
+        if emb:
+            embed_x = emb(fields)
+            y = model(fields,embed_x)
+        else:
+            y = model(fields)
         loss = criterion(y, target.float())
         model.zero_grad()
         loss.backward()
@@ -129,17 +64,18 @@ def train(model, optimizer, data_loader, criterion, device, log_interval=100,dec
             tk0.set_postfix(loss=total_loss / log_interval)
             total_loss = 0
 
-
-def test(model, data_loader, device,decision=None):
+def test(model, data_loader, device,emb=None):
     model.eval()
     targets, predicts, infer_time  = list(), list(), list()
     with torch.no_grad():
-        for fields, target in tqdm.tqdm(data_loader, smoothing=0, mininterval=1.0):
-            if decision:
-                fields = torch.cat([fields[:,None,i] for i in decision],-1)
+        for fields, target in tqdm(data_loader, smoothing=0, mininterval=1.0):
             fields, target = fields.to(device), target.to(device)
             start = time.time()
-            y = model(fields)
+            if emb:
+                embed_x = emb(fields)
+                y = model(fields,embed_x)
+            else:
+                y = model(fields)
             infer_cost = time.time() - start
             targets.extend(target.tolist())
             predicts.extend(y.tolist())
@@ -154,12 +90,7 @@ def main(dataset_name,
          batch_size,
          weight_decay,
          device,
-         save_dir,D):
-    decision = None
-    if D:
-        if dataset_name == 'avazu':
-            decision = [0, 2, 3, 4, 6, 9, 10, 11, 14, 17, 20]
-    print(decision)
+         save_dir,args):
     device = torch.device(device)
     dataset = get_dataset(dataset_name, dataset_path)
     train_length = int(len(dataset) * 0.8)
@@ -170,40 +101,71 @@ def main(dataset_name,
     train_data_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=8)
     valid_data_loader = DataLoader(valid_dataset, batch_size=batch_size, num_workers=8)
     test_data_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=8)
-    model = get_model(model_name, dataset,decision).to(device)
+    emb = FeaturesEmbedding(args.field_dims,args.embed_dim)
+    model = get_model(model_name, args.field_dims, args.embed_dim).to(device)
     criterion = torch.nn.BCELoss()
     optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     early_stopper = EarlyStopper(num_trials=2, save_path=f'{save_dir}/{model_name}.pt')
-    for epoch_i in range(epoch):
-        train(model, optimizer, train_data_loader, criterion, device, decision = decision)
-        auc, logloss, infer_time = test(model, valid_data_loader, device,decision)
+    #********************************  pre-train  ********************************#
+    for epoch_i in range(args.pre_epoch):
+        train(model, optimizer, train_data_loader, criterion, device,emb=emb)
+        auc, logloss, infer_time = test(model, valid_data_loader,device,emb=emb)
         print('epoch:', epoch_i, 'validation: auc:', auc,'logloss:',logloss,'infer_time:', infer_time)
-        if not early_stopper.is_continuable(model, auc):
+        if not early_stopper.is_continuable(model, auc,emb=emb):
             print(f'validation: best auc: {early_stopper.best_accuracy}')
             break
-    auc, logloss, infer_time = test(model, test_data_loader, device,decision)
-    print( 'test: auc:', auc,'logloss:',logloss,'infer_time:', infer_time)
+    model.load_state_dict(torch.load(f'{save_dir}/{model_name}.pt')['state_dict'])
+    emb.load_state_dict(torch.load(f'{save_dir}/emb.pt')['state_dict'])
+    auc, logloss, infer_time = test(model, test_data_loader, device, emb=emb)
+    print('Pretrain Result/n','test: auc:', auc,'logloss:',logloss,'infer_time:', infer_time)
+    #********************************  Pruning  ********************************#
+    pruner = Pruner(emb,model,criterion,train_data_loader)
+    masks = pruner(compression_factor=args.compress)[0]
+    del pruner
+    pruned_model = PrunedModel(emb,model_name, args.field_dims, masks)
+    del emb 
+    del model
+    #********************************  Retraining  ********************************#
+    print(masks)
+    early_stopper = EarlyStopper(num_trials=2, save_path=f'{save_dir}/{model_name}_pruned.pt')
+    for epoch_i in range(epoch):
+        train(pruned_model, optimizer, train_data_loader, criterion, device)
+        auc, logloss, infer_time = test(pruned_model, valid_data_loader,device)
+        print('epoch:', epoch_i, 'validation: auc:', auc,'logloss:',logloss,'infer_time:', infer_time)
+        if not early_stopper.is_continuable(pruned_model, auc):
+            print(f'validation: best auc: {early_stopper.best_accuracy}')
+            break
+    pruned_model.load_state_dict(torch.load(f'{save_dir}/{model_name}_pruned.pt')['state_dict'])
+    auc, logloss, infer_time = test(pruned_model, test_data_loader, device)
+    print('Pretrain Result/n','test: auc:', auc,'logloss:',logloss,'infer_time:', infer_time)
 
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_name', default='criteo')
+    parser.add_argument('--dataset_name', default='movielens1M')
     parser.add_argument('--dataset_path', help='criteo/train.txt, avazu/train, or ml-1m/ratings.dat')
     parser.add_argument('--model_name', default='dfm')
+    parser.add_argument('--pre_epoch', type=int, default=0)
     parser.add_argument('--epoch', type=int, default=100)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--batch_size', type=int, default=2048)
+    parser.add_argument('--embed_dim',type=int,default=8)
     parser.add_argument('--weight_decay', type=float, default=1e-6)
+    parser.add_argument('--compress',default=0.5)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--save_dir', default='chkpt')
-    parser.add_argument('--D',default='False')
+
     args = parser.parse_args()
     if args.dataset_name == 'criteo': args.dataset_path = 'criteo/train.txt'
-    if args.dataset_name == 'avazu': args.dataset_path = 'avazu/train'
-    if args.dataset_name == 'movielens1M': args.dataset_path = 'ml-1m/train.txt'
-    if args.dataset_name == 'movielens1M_inter': args.dataset_path = 'ml-1m/train_inter_part2.txt'
+    if args.dataset_name == 'avazu': args.dataset_path = '/Users/wangyejing/Desktop/FS/dataset/Avazu/train'
+    if args.dataset_name == 'movielens1M': args.dataset_path = '/Users/wangyejing/Desktop/FS/dataset/ml-1m/train.txt'
+    if args.dataset_name == 'movielens1M':
+        args.field_dims = [3706,301,81,6040,21,7,2,3402]
+    elif args.dataset_name == 'avazu':
+        args.field_dims = [241, 8, 8, 3697, 4614, 25, 5481, 329, 
+            31, 381763, 1611748, 6793, 6, 5, 2509, 9, 10, 432, 5, 68, 169, 61]
     main(args.dataset_name,
          args.dataset_path,
          args.model_name,
@@ -212,5 +174,4 @@ if __name__ == '__main__':
          args.batch_size,
          args.weight_decay,
          args.device,
-         args.save_dir,
-         args.D)
+         args.save_dir, args)
