@@ -5,12 +5,12 @@ import numpy as np
 from torchfm.model.dfm import DeepFactorizationMachineModel
 
 class Pruner(nn.Module):
-    def __init__(self, emb, model, criterion, dataloader):
+    def __init__(self, origin_model, criterion, dataloader):
         super(Pruner, self).__init__()
-        self.device =emb.embedding.weight.device
-        self.model = deepcopy(model)
-        self.emb =  deepcopy(emb)
-        self.mask = nn.Parameter(torch.ones([len(emb.field_dims), emb.embed_dim])).to(self.device)
+        self.model = deepcopy(origin_model.model)
+        self.emb =  deepcopy(origin_model.emb)
+        self.device =self.emb.embedding.weight.device
+        self.origin_model = OriginModel(self.emb,self.model,mask=1)
         self.criterion = criterion
         self.dataloader = dataloader
 
@@ -28,13 +28,12 @@ class Pruner(nn.Module):
             if i == num_batch_sampling:
                 break
             x, labels = data.to(self.device), labels.to(self.device)
-            embed_x = self.emb(x) * self.mask
-            out = self.model(x,embed_x)
+            out = self.origin_model(x)
             loss = self.criterion(out, labels.float())
-            self.model.zero_grad()
+            self.origin_model.zero_grad()
             loss.backward()
             grads_list = []
-            grads_list.append(torch.abs(self.mask.grad))
+            grads_list.append(torch.abs(self.origin_model.mask.grad))
             grads = torch.cat([torch.flatten(grad) for grad in grads_list])
             if i == 0:
                 moving_average_grads = grads
@@ -107,22 +106,45 @@ def get_model(name,field_dims,embed_dim):
 
 
 class PrunedModel(nn.Module):
-    def __init__(self,emb, model_name,field_dims,masks):
+    def __init__(self,origin_model, model_name,field_dims,masks):
         super(PrunedModel, self).__init__()
         self.d = masks.sum(1).int().tolist()
+        self.field_dims = []
+        for i in range(len(field_dims)):
+            if self.d[i]>0: 
+                self.field_dims.append(field_dims[i])
         self.dmax = max(self.d)
-        self.emb = deepcopy(emb)
+        self.emb = deepcopy(origin_model.emb)
         self.offsets = np.array((0, *np.cumsum(field_dims)[:-1]), dtype=np.long)
-        self.model = get_model(model_name,field_dims,self.dmax)
+        self.model = get_model(model_name,self.field_dims,self.dmax)
         self.embedding = nn.ModuleList(nn.Embedding.from_pretrained(self.emb.embedding.weight[self.offsets[i]:self.offsets[i]+field_dims[i],masks[i]>0]) for i in range(len(field_dims)))
         self.linear = nn.ModuleList(nn.Linear(self.d[i],self.dmax) for i in range(len(field_dims)))
 
     def forward(self,x):
         embed_list = []
+        decision = []
         for i in range(x.shape[1]):
-            embed_list.append(self.linear[i](self.embedding[i](x[:,i])).unsqueeze(1))
+            if self.d[i]:
+                embed_list.append(self.linear[i](self.embedding[i](x[:,i])).unsqueeze(1))
+                decision.append(i)
+        x_ = torch.cat([x[:,None,i] for i in decision],-1)
         embed_x = torch.cat(embed_list,1)
+        return self.model(x_,embed_x)
+
+class OriginModel(nn.Module):
+    def __init__(self, emb, model, mask =None):
+        super(OriginModel,self).__init__()
+        self.emb = emb
+        self.model = model
+        self.device =self.emb.embedding.weight.device
+        self.mask = nn.Parameter(torch.ones([len(self.emb.field_dims), self.emb.embed_dim]).to(self.device))
+    
+    def forward(self,x):
+        embed_x = self.emb(x)
+        if self.mask is not None:
+            embed_x = embed_x * self.mask
         return self.model(x,embed_x)
+
 
 
 
