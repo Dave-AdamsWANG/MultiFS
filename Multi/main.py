@@ -16,8 +16,15 @@ from models.mmoe import MMoEModel
 from models.ple import PLEModel
 from models.aitm import AITMModel
 from models.metaheac import MetaHeacModel
+from pruner import *
 
-
+def set_random_seed(seed):
+    print("* random_seed:", seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
 
 def get_dataset(name, path):
     if 'AliExpress' in name:
@@ -150,19 +157,31 @@ def main(dataset_name,
          embed_dim,
          weight_decay,
          device,
-         save_dir):
+         save_dir, 
+         cr):
     device = torch.device(device)
-    train_dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/train.csv')
-    test_dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/test.csv')
-    train_data_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=4, shuffle=True)
-    test_data_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=4, shuffle=False)
-
-    field_dims = train_dataset.field_dims
-    numerical_num = train_dataset.numerical_num
+    #train_dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/train.csv')
+    #test_dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/test.csv')
+    # field_dims = train_dataset.field_dims
+    # numerical_num = train_dataset.numerical_num
+    # train_data_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=4, shuffle=True)
+    # test_data_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=4, shuffle=False)
+    dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/test.csv')
+    train_length = int(len(dataset) * 0.8)
+    valid_length = int(len(dataset) * 0.1)
+    test_length = len(dataset) - train_length - valid_length
+    train_dataset, valid_dataset, test_dataset = torch.utils.data.random_split(
+        dataset, (train_length, valid_length, test_length),generator=torch.Generator().manual_seed(42))
+    train_data_loader = DataLoader(train_dataset, batch_size=batch_size)
+    valid_data_loader = DataLoader(valid_dataset, batch_size=batch_size)
+    test_data_loader = DataLoader(test_dataset, batch_size=batch_size)
+    field_dims = dataset.field_dims
+    numerical_num = dataset.numerical_num
     model = get_model(model_name, field_dims, numerical_num, task_num, expert_num, embed_dim).to(device)
     criterion = torch.nn.BCELoss()
-    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
     save_path=f'{save_dir}/{dataset_name}_{model_name}.pt'
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     early_stopper = EarlyStopper(num_trials=2, save_path=save_path)
     for epoch_i in range(epoch):
         if model_name == 'metaheac':
@@ -176,17 +195,38 @@ def main(dataset_name,
         if not early_stopper.is_continuable(model, np.array(auc).mean()):
             print(f'test: best auc: {early_stopper.best_accuracy}')
             break
-
     model.load_state_dict(torch.load(save_path))
     auc, loss = test(model, test_data_loader, task_num, device)
-    f = open('{}_{}.txt'.format(model_name, dataset_name), 'a', encoding = 'utf-8')
-    f.write('learning rate: {}\n'.format(learning_rate))
+    # f = open('{}_{}.txt'.format(model_name, dataset_name), 'a', encoding = 'utf-8')
+    # f.write('learning rate: {}\n'.format(learning_rate))
     for i in range(task_num):
         print('task {}, AUC {}, Log-loss {}'.format(i, auc[i], loss[i]))
-        f.write('task {}, AUC {}, Log-loss {}\n'.format(i, auc[i], loss[i]))
-    print('\n')
-    f.write('\n')
-    f.close()
+    #     f.write('task {}, AUC {}, Log-loss {}\n'.format(i, auc[i], loss[i]))
+    # print('\n')
+    # f.write('\n')
+    # f.close()
+    pruner = Prunner(model,criterion,train_data_loader)
+    pruned_model, mask = pruner.prun(compression_factor=cr)
+    del model
+    del pruner
+    save_path=f'{save_dir}/{dataset_name}_{model_name}_pruned.pt'
+    optimizer = torch.optim.Adam(params=pruned_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    early_stopper = EarlyStopper(num_trials=2, save_path=save_path)
+    for epoch_i in range(epoch):
+        if model_name == 'metaheac':
+            metatrain(pruned_model, optimizer, train_data_loader, device)
+        else:
+            train(pruned_model, optimizer, train_data_loader, criterion, device)
+        auc, loss = test(pruned_model, test_data_loader, task_num, device)
+        print('epoch:', epoch_i, 'test: auc:', auc)
+        for i in range(task_num):
+            print('task {}, AUC {}, Log-loss {}'.format(i, auc[i], loss[i]))
+        if not early_stopper.is_continuable(model, np.array(auc).mean()):
+            print(f'test: best auc: {early_stopper.best_accuracy}')
+            break
+    pruned_model.load_state_dict(torch.load(save_path))
+    auc, loss = test(pruned_model, test_data_loader, task_num, device)
+
 
 
 if __name__ == '__main__':
@@ -194,7 +234,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_name', default='AliExpress_NL', choices=['AliExpress_NL', 'AliExpress_ES', 'AliExpress_FR', 'AliExpress_US'])
-    parser.add_argument('--dataset_path', default='./data/')
+    parser.add_argument('--dataset_path', default='/Users/wangyejing/Desktop/FS/dataset/multi-task-data')
     parser.add_argument('--model_name', default='metaheac', choices=['singletask', 'sharedbottom', 'omoe', 'mmoe', 'ple', 'aitm', 'metaheac'])
     parser.add_argument('--epoch', type=int, default=50)
     parser.add_argument('--task_num', type=int, default=2)
@@ -205,7 +245,10 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', type=float, default=1e-6)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--save_dir', default='chkpt')
+    parser.add_argument('--compress_ratio',type=float,default=0.5)
     args = parser.parse_args()
+    print(' '.join(f'{k}={v}' for k, v in vars(args).items()))
+    set_random_seed(42)
     main(args.dataset_name,
          args.dataset_path,
          args.task_num,
@@ -217,4 +260,4 @@ if __name__ == '__main__':
          args.embed_dim,
          args.weight_decay,
          args.device,
-         args.save_dir)
+         args.save_dir,args.compress_ratio)
