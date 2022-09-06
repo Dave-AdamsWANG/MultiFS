@@ -114,6 +114,7 @@ def main(dataset_name,
     pruned_model = PrunedModel(origin_model, model_name,args.field_dims, masks).to(device)
     #********************************  Retraining  ********************************#
     print(masks)
+    optimizer = torch.optim.Adam(params=pruned_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     early_stopper = EarlyStopper(num_trials=2, save_path=f'{save_dir}/{model_name}_pruned.pt')
     for epoch_i in range(epoch):
         train(pruned_model, optimizer, train_data_loader, criterion, device)
@@ -147,7 +148,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.dataset_name == 'criteo': args.dataset_path = 'criteo/train.txt'
     if args.dataset_name == 'avazu': args.dataset_path = '/home/yejinwang2/scratch/dataset/avazu/train'
-    if args.dataset_name == 'movielens1M': args.dataset_path = '/home/yejinwang2/scratch/dataset/ml-1m/train.txt'
+    if args.dataset_name == 'movielens1M': args.dataset_path = '/Users/wangyejing/Desktop/FS/dataset/ml-1m/train.txt'
     if args.dataset_name == 'movielens1M':
         args.field_dims = [3706,301,81,6040,21,7,2,3402]
     elif args.dataset_name == 'avazu':
