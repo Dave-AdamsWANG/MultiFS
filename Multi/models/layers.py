@@ -1,6 +1,12 @@
 import torch
 import numpy as np
 
+def duplicate(x):
+    if len(x) !=2: # Don't set batch_size as two  
+        return [x,x]
+    return x
+
+
 class EmbeddingLayer(torch.nn.Module):
 
     def __init__(self, field_dims, embed_dim):

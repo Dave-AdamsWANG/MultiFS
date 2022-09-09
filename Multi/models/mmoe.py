@@ -1,5 +1,5 @@
 import torch
-from .layers import EmbeddingLayer, MultiLayerPerceptron
+from layers import EmbeddingLayer, MultiLayerPerceptron, duplicate
 
 
 class MMoEModel(torch.nn.Module):
@@ -28,8 +28,8 @@ class MMoEModel(torch.nn.Module):
         categorical_x: Long tensor of size ``(batch_size, categorical_field_dims)``
         numerical_x: Long tensor of size ``(batch_size, numerical_num)``
         """
-        categorical_emb = self.embedding(categorical_x)
-        numerical_emb = self.numerical_layer(numerical_x).unsqueeze(1)
+        categorical_emb = duplicate(self.embedding(categorical_x))
+        numerical_emb = duplicate(self.numerical_layer(numerical_x).unsqueeze(1))
         emb = torch.cat([categorical_emb, numerical_emb], 1).view(-1, self.embed_output_dim)
         gate_value = [self.gate[i](emb).unsqueeze(1) for i in range(self.task_num)]
         fea = torch.cat([self.expert[i](emb).unsqueeze(1) for i in range(self.expert_num)], dim = 1)
