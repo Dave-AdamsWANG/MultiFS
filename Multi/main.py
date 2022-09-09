@@ -160,29 +160,30 @@ def main(dataset_name,
          save_dir, 
          cr):
     device = torch.device(device)
-    #train_dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/train.csv')
-    #test_dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/test.csv')
-    # field_dims = train_dataset.field_dims
-    # numerical_num = train_dataset.numerical_num
-    # train_data_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=4, shuffle=True)
-    # test_data_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=4, shuffle=False)
-    dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/test.csv')
-    train_length = int(len(dataset) * 0.8)
-    valid_length = int(len(dataset) * 0.1)
-    test_length = len(dataset) - train_length - valid_length
-    train_dataset, valid_dataset, test_dataset = torch.utils.data.random_split(
-        dataset, (train_length, valid_length, test_length),generator=torch.Generator().manual_seed(42))
-    train_data_loader = DataLoader(train_dataset, batch_size=batch_size)
-    valid_data_loader = DataLoader(valid_dataset, batch_size=batch_size)
-    test_data_loader = DataLoader(test_dataset, batch_size=batch_size)
-    field_dims = dataset.field_dims
-    numerical_num = dataset.numerical_num
+    train_dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/train.csv')
+    test_dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/test.csv')
+    field_dims = train_dataset.field_dims
+    numerical_num = train_dataset.numerical_num
+    train_data_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=4, shuffle=True)
+    test_data_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=4, shuffle=False)
+
+    # dataset = get_dataset(dataset_name, os.path.join(dataset_path, dataset_name) + '/test.csv')
+    # train_length = int(len(dataset) * 0.8)
+    # valid_length = int(len(dataset) * 0.1)
+    # test_length = len(dataset) - train_length - valid_length
+    # train_dataset, valid_dataset, test_dataset = torch.utils.data.random_split(
+    #     dataset, (train_length, valid_length, test_length),generator=torch.Generator().manual_seed(42))
+    # train_data_loader = DataLoader(train_dataset, batch_size=batch_size)
+    # valid_data_loader = DataLoader(valid_dataset, batch_size=batch_size)
+    # test_data_loader = DataLoader(test_dataset, batch_size=batch_size)
+    # field_dims = dataset.field_dims
+    # numerical_num = dataset.numerical_num
     model = get_model(model_name, field_dims, numerical_num, task_num, expert_num, embed_dim).to(device)
     criterion = torch.nn.BCELoss()
 
     save_path=f'{save_dir}/{dataset_name}_{model_name}.pt'
     optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    early_stopper = EarlyStopper(num_trials=2, save_path=save_path)
+    early_stopper = EarlyStopper(num_trials=5, save_path=save_path)
     for epoch_i in range(epoch):
         if model_name == 'metaheac':
             metatrain(model, optimizer, train_data_loader, device)
@@ -206,26 +207,32 @@ def main(dataset_name,
     # f.write('\n')
     # f.close()
     pruner = Prunner(model,criterion,train_data_loader)
-    pruned_model, mask = pruner.prun(compression_factor=cr)
     del model
-    del pruner
-    save_path=f'{save_dir}/{dataset_name}_{model_name}_pruned.pt'
-    optimizer = torch.optim.Adam(params=pruned_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    early_stopper = EarlyStopper(num_trials=2, save_path=save_path)
-    for epoch_i in range(epoch):
-        if model_name == 'metaheac':
-            metatrain(pruned_model, optimizer, train_data_loader, device)
-        else:
-            train(pruned_model, optimizer, train_data_loader, criterion, device)
+    for i in range(1,10):
+        pruned_model, mask = pruner.prun(compression_factor=i/10)
+        print(mask[0].shape)
+        print(mask[0].sum())
+        print(mask[1].shape)
+        print(mask[1].sum())
+        save_path=f'{save_dir}/{dataset_name}_{model_name}_pruned_{i}.pt'
+        optimizer = torch.optim.Adam(params=pruned_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        early_stopper = EarlyStopper(num_trials=5, save_path=save_path)
+        for epoch_i in range(epoch):
+            if model_name == 'metaheac':
+                metatrain(pruned_model, optimizer, train_data_loader, device)
+            else:
+                train(pruned_model, optimizer, train_data_loader, criterion, device)
+            auc, loss = test(pruned_model, test_data_loader, task_num, device)
+            print('epoch:', epoch_i, 'test: auc:', auc)
+            for i in range(task_num):
+                print('task {}, AUC {}, Log-loss {}'.format(i, auc[i], loss[i]))
+            if not early_stopper.is_continuable(pruned_model, np.array(auc).mean()):
+                print(f'test: best auc: {early_stopper.best_accuracy}')
+                break
+        pruned_model.load_state_dict(torch.load(save_path))
         auc, loss = test(pruned_model, test_data_loader, task_num, device)
-        print('epoch:', epoch_i, 'test: auc:', auc)
         for i in range(task_num):
             print('task {}, AUC {}, Log-loss {}'.format(i, auc[i], loss[i]))
-        if not early_stopper.is_continuable(model, np.array(auc).mean()):
-            print(f'test: best auc: {early_stopper.best_accuracy}')
-            break
-    pruned_model.load_state_dict(torch.load(save_path))
-    auc, loss = test(pruned_model, test_data_loader, task_num, device)
 
 
 

@@ -14,6 +14,12 @@ forward_mapping_dict = {
     'Linear': snip_forward_linear,
     'Embedding': snip_forward_embedding
 }
+def weight_reset(m):
+    for i in m.named_children():
+        if i[0] not in ['embedding','numerical_layer']: 
+            for j in i[1].modules():
+                if type(j).__name__ == 'Linear':
+                    j.reset_parameters()
 
 class Prunner:
 
@@ -38,7 +44,9 @@ class Prunner:
             layer.weight.data = layer.weight.data * mask
             layer.weight.register_hook(apply_masking(mask))
         
+        
     def prun(self, compression_factor=0.5, num_batch_sampling=1):
+        weight_reset(self.prun_model)
         grads, grads_list = self.compute_grads(num_batch_sampling)
         keep_params = int((1 - compression_factor) * len(grads))
         values, idxs = torch.topk(grads / grads.sum(), keep_params, sorted=True)
@@ -81,13 +89,13 @@ class Prunner:
         for layer in self.model.numerical_layer.modules():
             if type(layer).__name__ in forward_mapping_dict:
                 layer.weight_mask = nn.Parameter(torch.ones_like(layer.weight).to(device))
-                nn.init.xavier_normal_(layer.weight)
+                #nn.init.xavier_normal_(layer.weight)
                 layer.weight.requires_grad = False
                 
         for layer in self.model.embedding.modules():
             if type(layer).__name__ in forward_mapping_dict:
                 layer.weight_mask = nn.Parameter(torch.ones_like(layer.weight).to(device))
-                nn.init.xavier_normal_(layer.weight)
+                #nn.init.xavier_normal_(layer.weight)
                 layer.weight.requires_grad = False
     
     def update_forward_pass(self):
