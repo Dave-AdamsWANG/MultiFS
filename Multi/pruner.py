@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 import copy
 import types
 def snip_forward_linear(self, x):
@@ -20,6 +21,45 @@ def weight_reset(m):
             for j in i[1].modules():
                 if type(j).__name__ == 'Linear':
                     j.reset_parameters()
+
+def sum_gd(gd, field_dims=None, solution = 2):
+    '''
+    gd: tensor of the whole gradient matrix
+    field_dims: feature dims for discrete features, number for continuous features
+    solution: 1 for SSEDS, 2 for FS
+    '''
+    if field_dims is not None: # first sum gradient for discrete features
+        offset = np.array((0, *np.cumsum(field_dims)), dtype=np.long)
+        gd_sum = torch.zeros([gd.shape[0],len(field_dims),gd.shape[-1]]).to(gd.device)
+        for i in range(len(offset)-1):
+            gd_sum[:,i] = torch.sum(gd[:,offset[i]:offset[i+1]],1)
+        if solution == 1:
+            return gd_sum
+        else: 
+            return gd_sum.sum(-1)
+    else: 
+        if solution == 1:
+            return gd
+        else: 
+            return gd.sum(1)
+
+def mask_expand(mask, embed_dim, field_dims= None, solution=2):
+    if solution == 2:
+        if field_dims is not None:
+            masks = []
+            for i in range(len(field_dims)):
+                masks.append(mask[i].repeat(field_dims[i]))
+            return torch.cat(masks,0).unsqueeze(-1).expand(-1,embed_dim)
+        else:
+            return mask.unsqueeze(-1).expand(-1,embed_dim).transpose(1,0)
+    else: # solution ==1, TBD
+        if field_dims is not None:
+            masks = []
+            for i in range(len(field_dims)):
+                masks.append(mask[i].expand(field_dims[i],-1))
+            return torch.cat(masks,0)
+        else:
+            return mask
 
 class Prunner:
     def __init__(self, model, criterion, dataloader):
@@ -54,7 +94,8 @@ class Prunner:
             keep_params = int((1 - compression_factor) * len(grads))
             values, idxs = torch.topk(grads / grads.sum(), keep_params, sorted=True)
             threshold = values[-1]
-            masks.append([(grad / grads.sum() > threshold).float() for grad in gl])
+            res = [(grad / grads.sum() > threshold).float() for grad in gl]
+            masks.append([mask_expand(res[0],self.model.embedding.embed_dim),mask_expand(res[1], self.model.embedding.embed_dim, self.model.embedding.field_dims)])
         for i in range(len(masks)):
             if i == 0:
                 mask = masks[i]
@@ -80,10 +121,10 @@ class Prunner:
             grads_list = []
             for layer in self.model.numerical_layer.modules():
                 if type(layer).__name__ in forward_mapping_dict:
-                    grads_list.append(torch.abs(layer.weight_mask.grad))
+                    grads_list.append(sum_gd(torch.abs(layer.weight_mask.grad)))
             for layer in self.model.embedding.modules():
                 if type(layer).__name__ in forward_mapping_dict:
-                    grads_list.append(torch.abs(layer.weight_mask.grad))
+                    grads_list.append(sum_gd(torch.abs(layer.weight_mask.grad),self.model.embedding.field_dims))
             if i == 0:
                 moving_average_grad_list = grads_list
             else:
