@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from .layers import EmbeddingLayer, MultiLayerPerceptron
+from .layers import EmbeddingLayer, MultiLayerPerceptron,duplicate
 
 
 class AITMModel(torch.nn.Module):
@@ -34,9 +34,11 @@ class AITMModel(torch.nn.Module):
         numerical_x: Long tensor of size ``(batch_size, numerical_num)``
         """
         categorical_emb = self.embedding(categorical_x)
-        numerical_emb = self.numerical_layer(numerical_x).unsqueeze(1)
-        emb = torch.cat([categorical_emb, numerical_emb], 1).view(-1, self.embed_output_dim)
-        fea = [self.bottom[i](emb) for i in range(self.task_num)]
+        numerical_emb = self.numerical_layer(numerical_x)
+        categorical_emb = duplicate(categorical_emb)
+        numerical_emb = duplicate(numerical_emb)
+        emb = [torch.cat([categorical_emb[i], numerical_emb[i].unsqueeze(1)], 1).view(-1, self.embed_output_dim) for i in range(self.task_num)]
+        fea = [self.bottom[i](emb[i]) for i in range(self.task_num)]
 
         for i in range(1, self.task_num):
             p = self.g[i - 1](fea[i - 1]).unsqueeze(1)

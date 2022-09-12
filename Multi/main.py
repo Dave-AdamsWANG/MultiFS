@@ -210,10 +210,6 @@ def main(dataset_name,
     del model
     for i in range(1,10):
         pruned_model, mask = pruner.prun(compression_factor=i/10)
-        print(mask[0].shape)
-        print(mask[0].sum())
-        print(mask[1].shape)
-        print(mask[1].sum())
         save_path=f'{save_dir}/{dataset_name}_{model_name}_pruned_{i}.pt'
         optimizer = torch.optim.Adam(params=pruned_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         early_stopper = EarlyStopper(num_trials=5, save_path=save_path)

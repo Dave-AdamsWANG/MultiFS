@@ -1,5 +1,5 @@
 import torch
-from .layers import EmbeddingLayer, MultiLayerPerceptron
+from .layers import EmbeddingLayer, MultiLayerPerceptron,duplicate
 
 
 class PLEModel(torch.nn.Module):
@@ -56,10 +56,11 @@ class PLEModel(torch.nn.Module):
         numerical_x: Long tensor of size ``(batch_size, numerical_num)``
         """
         categorical_emb = self.embedding(categorical_x)
-        numerical_emb = self.numerical_layer(numerical_x).unsqueeze(1)
-        emb = torch.cat([categorical_emb, numerical_emb], 1).view(-1, self.embed_output_dim)
-
-        task_fea = [emb for i in range(self.task_num + 1)]
+        numerical_emb = self.numerical_layer(numerical_x)
+        categorical_emb = duplicate(categorical_emb)
+        numerical_emb = duplicate(numerical_emb)
+        emb = [torch.cat([categorical_emb[i], numerical_emb[i].unsqueeze(1)], 1).view(-1, self.embed_output_dim) for i in range(self.task_num)]
+        task_fea = emb+ [sum(emb)/len(emb)]
         for i in range(self.layers_num):
             for j in range(self.task_num + 1):
                 fea = torch.cat([self.expert[i][index](task_fea[j]).unsqueeze(1) for index in self.task_expert_index[j]], dim = 1)

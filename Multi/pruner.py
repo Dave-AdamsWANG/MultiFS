@@ -65,7 +65,6 @@ class Prunner:
         return self.prun_model, masks
 
     def compute_grads(self, num_batch_sampling=1):
-        moving_average_grads = [0] * self.model.task_num
         moving_average_grad_list = [[]] * self.model.task_num
         for i, (c_data, n_data, labels) in enumerate(self.dataloader):
             if i == num_batch_sampling:
